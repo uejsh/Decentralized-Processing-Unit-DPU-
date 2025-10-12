@@ -49,6 +49,6 @@ DPU demonstrates a **trustless, verifiable, scalable approach to decentralized c
 - Composable workflows 🧩  
 - Atomic transactions ⚡  
 
-It’s essentially a **Flow-native evolution of Golem**, designed to **wow judges and hackathons**.  
+It’s essentially a **Flow-native evolution of Golem**, designed to **revolutionise computing**.  
 
 ---
