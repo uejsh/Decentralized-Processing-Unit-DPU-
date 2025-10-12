@@ -23,7 +23,7 @@ The **Decentralized Processing Unit (DPU)** is a **Flow-based, trustless, auctio
 
 ## 🏗 Architecture
 
-![DPU Architecture GIF](https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif) *(replace with your own GIF or diagram later)*  
+![DPU Architecture GIF](https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif)
 
 1. **User submits task** → creates a `Task` resource with code snippet or reference.  
 2. **Task stored on-chain** → secured in **TaskManager contract**.  
