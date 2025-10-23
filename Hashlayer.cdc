@@ -424,4 +424,3 @@ pub contract HashLayer {
         destroy self.fallbackOutputShares
     }
 }
-How’s this for a hackathons n
