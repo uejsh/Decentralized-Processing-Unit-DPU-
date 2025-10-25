@@ -64,3 +64,58 @@ Flow’s **resource-oriented model** and **Actions framework** make it the perfe
 ---
 
 ## 🧱 Architecture Overview
+┌──────────────────────────────┐
+│   Client / Off-chain Node    │
+│   • Receives Task            │
+│   • Computes Matrix Hash     │
+│   • Submits Commit           │
+└──────────────┬───────────────┘
+│
+▼
+┌──────────────────────────────┐
+│    HashLayer Contract        │
+│   • Task Registry            │
+│   • Consensus Logic          │
+│   • Share Ownership          │
+│   • Royalty Distribution     │
+└──────────────┬───────────────┘
+│
+▼
+Flow Actions
+│
+▼
+┌──────────────────────────────┐
+│     RoyaltySink + Vaults     │
+│  Auto-pay contributors when  │
+│  computation is reused       │
+└──────────────────────────────┘
+---
+
+## 🧬 The Future of Computation
+
+Instead of recomputing from scratch, AI models, games, and research systems can **import proven computation paths instantly** — paying only a small fee for the matrix hashes they rely on.
+
+This architecture:
+- Reduces redundant compute  
+- Enables ownership of digital processes  
+- Makes intelligence *composable*
+
+> ⚡️ Computation becomes an open, monetizable network — not just a service.
+
+---
+
+## 🏗 Roadmap
+
+- [ ] On-chain consensus for matrix validation  
+- [ ] Off-chain compute node coordination via IPFS or decentralized runtime  
+- [ ] Frontend dashboard for ownership + usage visualization  
+- [ ] Integration with Flow Testnet Actions for demo execution  
+
+---
+
+## 🧑‍💻 Authors
+
+**HashLayer Solo dev**  
+Built for the Flow ecosystem.  
+Powered by **Flow Actions** and **Cadence smart contracts**.  
+
