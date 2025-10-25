@@ -2,14 +2,16 @@
 //
 // HashLayer.cdc
 //
-// Foundation for a decentralized compute consensus system
-// - No row data stored on-chain; only rowHash kept in OutputShare
+// Decentralized compute consensus + royalty layer
+// - Per-task vaults for royalties & escrow
 // - Commit / Reveal -> consensus -> mint OutputShares -> pay-per-use with split + royalties + escrow
+// - Flow Actions sink per-task to deposit royalties atomically
 //
-// IMPORTANT: Test thoroughly on Flow emulator / testnet before using on mainnet.
+// NOTE: Test extensively on Flow emulator / Testnet before deploying to Mainnet.
 
 import FungibleToken from 0x9a0766d93b6608b7
 import FlowToken from 0x7e60df042a9c0868
+import Actions from 0xForteActions
 import Crypto from 0x631e88ae7f1d7c20
 
 access(all) contract HashLayer {
@@ -73,7 +75,7 @@ access(all) contract HashLayer {
         return <- create OutputShareCollection()
     }
 
-    // ---------------- Task resource (commit/reveal) ----------------
+    // ---------------- Task resource ----------------
     access(all) resource Task {
         access(all) let id: UInt64
         access(all) let owner: Address
@@ -87,15 +89,15 @@ access(all) contract HashLayer {
         // commit/reveal maps (worker -> hash)
         access(self) var commits: {Address: String}
         access(self) var reveals: {Address: String}
-
-        // stores optional revealCIDs (e.g., ipfs CIDs for rowParts)
         access(self) var revealCIDs: {Address: String}
-
         access(self) var accepted: Bool
 
-        // optional deadlines (unix epoch seconds or similar)
+        // deadlines (seconds since epoch). Use 0.0 for no deadline.
         access(all) let commitDeadline: UFix64
         access(all) let revealDeadline: UFix64
+
+        // Per-task vault for royalties / escrow / payouts
+        access(self) var taskVault: @FlowToken.Vault
 
         init(
             id: UInt64,
@@ -119,17 +121,33 @@ access(all) contract HashLayer {
             self.accepted = false
             self.commitDeadline = commitDeadline
             self.revealDeadline = revealDeadline
+            self.taskVault <- FlowToken.createEmptyVault()
+        }
+
+        destroy() {
+            destroy self.taskVault
         }
 
         // Worker commits an answer hash
         access(all) fun commit(worker: Address, commitHash: String) {
-            // optionally, check time vs commitDeadline
+            // enforce commitDeadline if set (>0)
+            if self.commitDeadline > 0.0 {
+                let now: UFix64 = getCurrentBlock().timestamp
+                if now > self.commitDeadline {
+                    panic("Commit deadline passed")
+                }
+            }
             self.commits[worker] = commitHash
         }
 
         // Worker reveals answer details (we only store a result hash for consensus)
         access(all) fun reveal(worker: Address, resultHash: String, revealCID: String?) {
-            // optionally, check time vs revealDeadline
+            if self.revealDeadline > 0.0 {
+                let now: UFix64 = getCurrentBlock().timestamp
+                if now > self.revealDeadline {
+                    panic("Reveal deadline passed")
+                }
+            }
             self.reveals[worker] = resultHash
             if revealCID != nil {
                 self.revealCIDs[worker] = revealCID!
@@ -165,10 +183,7 @@ access(all) contract HashLayer {
     // nodeResults[taskId][nodeAddr] = resultHash
     access(self) var nodeResults: {UInt64: {Address: String}}
 
-    // escrow map: funds reserved per task for later distribution
-    access(self) var taskUsageEscrow: {UInt64: UFix64}
-
-    // contractVault used as temporary holding for payments (resource)
+    // contract-level vault (temporary, but most flows deposit directly to taskVault)
     access(self) var contractVault: @FlowToken.Vault
 
     init() {
@@ -183,8 +198,6 @@ access(all) contract HashLayer {
 
         self.rowAssignments = {}
         self.nodeResults = {}
-
-        self.taskUsageEscrow = {}
 
         self.contractVault <- FlowToken.createEmptyVault()
     }
@@ -205,6 +218,11 @@ access(all) contract HashLayer {
         commitDeadline: UFix64,
         revealDeadline: UFix64
     ): UInt64 {
+        // validate royaltyPct range
+        if royaltyPct < 0.0 || royaltyPct > 1.0 {
+            panic("royaltyPct must be between 0.0 and 1.0")
+        }
+
         let id = self.nextTaskId
         self.nextTaskId = id + 1
 
@@ -234,6 +252,39 @@ access(all) contract HashLayer {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
         tRef!.reveal(self.account.address, resultHash, revealCID)
         emit RevealSubmitted(taskId: taskId, worker: self.account.address, resultHash: resultHash)
+    }
+
+    // ---------------- Flow Actions Royalty Sink ----------------
+    // Provides a per-task Actions.Sink that deposits directly into that task's vault.
+
+    pub resource RoyaltySink: Actions.Sink {
+        access(contract) let taskId: UInt64
+
+        init(taskId: UInt64) {
+            self.taskId = taskId
+        }
+
+        // deposit FlowToken vault into the task's vault
+        pub fun depositTokens(from: @FlowToken.Vault): Bool {
+            HashLayer.depositToTaskVault(taskId: self.taskId, from: <- from)
+            return true
+        }
+    }
+
+    pub fun createRoyaltySink(taskId: UInt64): @RoyaltySink {
+        let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
+        // only task owner can create a sink for their task
+        pre { self.account.address == tRef!.owner: "Only task owner can create royalty sink" }
+        return <- create RoyaltySink(taskId: taskId)
+    }
+
+    // internal function used by RoyaltySink to move funds into task vault
+    access(contract) fun depositToTaskVault(taskId: UInt64, from: @FlowToken.Vault) {
+        let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
+        tRef!.taskVault.deposit(from: <- from)
+        // emit event with deposited amount for off-chain indexing
+        emit UsagePaid(taskId: taskId, payer: self.account.address, usageFee: 0.0, splitToShares: 0.0, escrowed: 0.0)
+        // Note: specific UsagePaid event for Action deposits can be added if desired
     }
 
     // ---------------- acceptMatrixAndDistributeShares (owner must sign) ----------------
@@ -302,12 +353,10 @@ access(all) contract HashLayer {
             self.taskShareOwners[taskId] = []
         }
 
-        // Ensure fallback map for this task exists
+        // Ensure fallback map for this task exists (resource)
         if self.fallbackOutputShares[taskId] == nil {
-            // create a new inner resource dictionary for fallback shares
             var inner: @{UInt64: OutputShare} <- {}
             self.fallbackOutputShares[taskId] <-! inner
-            // Note: after <-! we moved it in; but to ensure we can access, we will borrow via & later when needed
         }
 
         // Mint OutputShares (no row data stored). Deposit if receiver exists, else fallback.
@@ -374,33 +423,39 @@ access(all) contract HashLayer {
         emit TaskAccepted(taskId: taskId, winningHash: bestHash!, winners: winners)
     }
 
-    // ---------------- payToUseFunction (clarified split + royalty) ----------------
-    // - 5% immediate split to current share owners (if any). If none, that 5% goes into escrow.
-    // - royaltyPct (per-task) is paid to task owner immediately where possible, otherwise escrowed.
-    // - remainder goes to task usage escrow for later finalization.
+    // ---------------- payToUseFunction ----------------
+    // - splitToSharesPct: split among current share owners immediately (if possible)
+    // - royaltyPct (per-task) goes to task owner immediately if possible
+    // - remainder stays inside taskVault as escrow for future finalization
     access(all) fun payToUseFunction(taskId: UInt64, payer: AuthAccount, usageFee: UFix64) {
         if usageFee <= 0.0 { panic("usageFee must be > 0") }
 
+        let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
+        let task = tRef!
+
+        // Withdraw from payer and deposit directly into taskVault (avoids contract-level mixing)
         let payerVault = payer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
             ?? panic("Cannot borrow payer vault")
         let payment <- payerVault.withdraw(amount: usageFee)
-        self.contractVault.deposit(from: <- payment)
+        task.taskVault.deposit(from: <- payment)
 
         // constants and safe checks
         let splitToSharesPct: UFix64 = 0.05
-        let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
-        let royaltyPct: UFix64 = tRef!.royaltyPct
+        let royaltyPct: UFix64 = task.royaltyPct
         pre { splitToSharesPct + royaltyPct <= 1.0: "Split percentages exceed 100%" }
 
         let splitToSharesAmount: UFix64 = usageFee * splitToSharesPct
         let royaltyAmount: UFix64 = usageFee * royaltyPct
+        // remainder intentionally left in taskVault as escrow
         let escrowAmount: UFix64 = usageFee - splitToSharesAmount - royaltyAmount
 
         // 1) Distribute splitToSharesAmount among current share owners (equal per-owner)
         let owners = self.taskShareOwners[taskId] ?? []
         let ownersCount = owners.length
         if ownersCount > 0 {
+            // compute per-owner with truncation rules of UFix64 division
             let perOwner: UFix64 = splitToSharesAmount / UFix64(ownersCount)
+            var distributedTotal: UFix64 = 0.0
             var idx = 0
             while idx < ownersCount {
                 let o = owners[idx]
@@ -409,51 +464,43 @@ access(all) contract HashLayer {
                     .borrow<&{FungibleToken.Receiver}>()
 
                 if maybeReceiver != nil {
-                    let pay <- self.contractVault.withdraw(amount: perOwner)
+                    let pay <- task.taskVault.withdraw(amount: perOwner)
                     maybeReceiver!.deposit(from: <- pay)
                 } else {
-                    // Owner has no receiver linked; keep their portion in escrow
-                    let pay <- self.contractVault.withdraw(amount: perOwner)
-                    self.contractVault.deposit(from: <- pay)
-                    let prev = self.taskUsageEscrow[taskId] ?? 0.0
-                    self.taskUsageEscrow[taskId] = prev + perOwner
+                    // Owner has no receiver linked; keep their portion in the task vault (escrow)
+                    // No withdraw; portion remains in task.taskVault
                 }
+                distributedTotal = distributedTotal + perOwner
                 idx = idx + 1
             }
+
+            // leftover due to division (dust) remains in task.taskVault
             emit RewardSplitToShares(taskId: taskId, totalSharesSplit: splitToSharesAmount, perShareOwner: perOwner)
         } else {
-            // No owners yet: move the split amount to escrow
-            let prev = self.taskUsageEscrow[taskId] ?? 0.0
-            self.taskUsageEscrow[taskId] = prev + splitToSharesAmount
+            // No owners yet: leave split amount as escrow in taskVault
+            // already deposited above; nothing to do
         }
 
-        // 2) Pay royalty to task owner immediately if possible, otherwise escrow it
-        let ownerAddr = tRef!.owner
-        let ownerReceiver = getAccount(ownerAddr)
-            .getCapability(/public/flowTokenReceiver)
-            .borrow<&{FungibleToken.Receiver}>()
+        // 2) Pay royalty to task owner immediately if possible, otherwise leave in taskVault
         if royaltyAmount > 0.0 {
+            let ownerAddr = task.owner
+            let ownerReceiver = getAccount(ownerAddr)
+                .getCapability(/public/flowTokenReceiver)
+                .borrow<&{FungibleToken.Receiver}>()
             if ownerReceiver != nil {
-                let payRoyal <- self.contractVault.withdraw(amount: royaltyAmount)
+                let payRoyal <- task.taskVault.withdraw(amount: royaltyAmount)
                 ownerReceiver!.deposit(from: <- payRoyal)
             } else {
-                // escrow royalty
-                let prev = self.taskUsageEscrow[taskId] ?? 0.0
-                self.taskUsageEscrow[taskId] = prev + royaltyAmount
+                // leave royalty in taskVault as escrow
             }
         }
 
-        // 3) Put the remainder into usage escrow
-        if escrowAmount > 0.0 {
-            let prev = self.taskUsageEscrow[taskId] ?? 0.0
-            self.taskUsageEscrow[taskId] = prev + escrowAmount
-        }
-
+        // 3) remainder already left in taskVault as escrow
         emit UsagePaid(taskId: taskId, payer: payer.address, usageFee: usageFee, splitToShares: splitToSharesAmount, escrowed: escrowAmount)
     }
 
     // ---------------- finalizeNodeResults ----------------
-    // Judges: this draws from taskUsageEscrow and pays winning nodes pro-rata among winners (equal split here)
+    // Pays winners pro-rata from the taskVault. If any winner cannot accept, leave funds in vault.
     access(all) fun finalizeNodeResults(taskId: UInt64) {
         let resultsMap = self.nodeResults[taskId] ?? panic("No node results for task")
         var freq: {String: [Address]} = {}
@@ -484,10 +531,14 @@ access(all) contract HashLayer {
         let winnersCount = winners.length
         if winnersCount == 0 { panic("No winners") }
 
-        let escrowed = self.taskUsageEscrow[taskId] ?? 0.0
-        if escrowed <= 0.0 { panic("No escrowed funds for task") }
+        let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
+        let task = tRef!
 
-        let perWinner: UFix64 = escrowed / UFix64(winnersCount)
+        let escrowedBalance: UFix64 = task.taskVault.balance
+        if escrowedBalance <= 0.0 { panic("No escrowed funds for task") }
+
+        // equal split to winners (you may change to proportional if you track shares per-row)
+        let perWinner: UFix64 = escrowedBalance / UFix64(winnersCount)
 
         var idx = 0
         while idx < winnersCount {
@@ -496,27 +547,51 @@ access(all) contract HashLayer {
                 .getCapability(/public/flowTokenReceiver)
                 .borrow<&{FungibleToken.Receiver}>()
             if wReceiver != nil {
-                let pay <- self.contractVault.withdraw(amount: perWinner)
+                let pay <- task.taskVault.withdraw(amount: perWinner)
                 wReceiver!.deposit(from: <- pay)
             } else {
-                // if winner has no receiver, leave the funds in escrow for later
-                break
+                // if winner has no receiver, skip and leave funds in vault
             }
             idx = idx + 1
         }
 
-        // Zero the escrow only if all winners were paid
-        let allPaid = idx == winnersCount
-        if allPaid {
-            self.taskUsageEscrow[taskId] = 0.0
-            emit NodeResultsFinalized(taskId: taskId, winningHash: bestHash!, winners: winners, payoutPerWinner: perWinner)
+        // leftover (dust or skipped winners) remains in task.taskVault
+        emit NodeResultsFinalized(taskId: taskId, winningHash: bestHash!, winners: winners, payoutPerWinner: perWinner)
+    }
+
+    // ---------------- Claim fallback shares helper ----------------
+    // Allows an account to claim fallback (un-deposited) output shares into their registered collection.
+    // Caller must be the claimant (AuthAccount passed).
+    pub fun claimFallbackShares(taskId: UInt64, claimant: AuthAccount) {
+        // ensure claimant has a collection capability
+        let receiverCap = claimant.getCapability(/public/HashLayerOutputShareReceiver)
+            .borrow<&{OutputShareReceiver}>()
+        if receiverCap == nil {
+            panic("Claimant has not registered a HashLayerOutputShareReceiver at /public/HashLayerOutputShareReceiver")
+        }
+
+        // attempt to remove fallback mapping for task
+        if self.fallbackOutputShares[taskId] == nil {
+            return
+        }
+        var map <- self.fallbackOutputShares.remove(key: taskId)!
+        // iterate and deposit any shares whose owner equals claimant.address
+        for shareId in map.keys {
+            let shareOwner = self.shareOwners[shareId] ?? panic("share owner missing")
+            if shareOwner == claimant.address {
+                let outShare <- map.remove(key: shareId) as @OutputShare
+                receiverCap!.deposit(share: <- outShare, shareId: shareId)
+            }
+        }
+        // put back the possibly reduced map
+        if map.keys.length > 0 {
+            self.fallbackOutputShares[taskId] <-! map
         } else {
-            // partial payment occurred or none — leave remaining escrow as is
-            emit NodeResultsFinalized(taskId: taskId, winningHash: bestHash!, winners: winners, payoutPerWinner: perWinner)
+            destroy map
         }
     }
 
-    // ---------------- View / helpers ----------------
+    // ---------------- Views / helpers ----------------
 
     pub fun getShareIdsForTask(taskId: UInt64): [UInt64] {
         return self.taskShareIds[taskId] ?? []
@@ -526,13 +601,12 @@ access(all) contract HashLayer {
         return self.taskShareOwners[taskId] ?? []
     }
 
-    pub fun getFallbackSharesForTask(taskId: UInt64): @{UInt64: OutputShare}? {
-        // Move out a copy of the fallback shares mapping for read; caller must destroy it
+    // Returns a moved copy of fallback shares for on-chain inspection; caller must destroy
+    pub fun takeFallbackSharesForTask(taskId: UInt64): @{UInt64: OutputShare}? {
         if self.fallbackOutputShares[taskId] == nil {
             return nil
         }
         let map <- self.fallbackOutputShares.remove(key: taskId)!
-        self.fallbackOutputShares[taskId] <-! map
         return <- map
     }
 }
