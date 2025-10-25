@@ -1,54 +1,66 @@
+# ⚙️ HashLayer — The Compute Consensus Layer
 
-# ⚡ Decentralized Processing Unit (DPU)
-
-[![Flow](https://img.shields.io/badge/Flow-22B573?style=for-the-badge&logo=Flow&logoColor=white)](https://flow.com)  
-[![Hackathon Ready](https://img.shields.io/badge/Hackathon-🔥-red?style=for-the-badge)]()  
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
-
-**Flow-Powered Decentralized Computation Network**  
-
-The **Decentralized Processing Unit (DPU)** is a **Flow-based, trustless, auction-driven computing network**. Users submit computational tasks as **on-chain resources**, nodes execute them **off-chain**, submit **verifiable proofs of execution**, and get rewarded. With **partial execution**, **auction-based handoff**, and **proof-of-function verification**, DPU redefines decentralized computation.
+### 🧠 Turning computation into an ownable, tradable, and rewardable digital resource.
 
 ---
 
-## 🚀 Key Features
+## 🚀 Vision
 
-- **📌 Task as Resources:** Cadence resources ensure tasks are **immutable, secure, and verifiable**.  
-- **⏱ Partial Execution & Handoff:** Nodes run tasks as much as they want, then **freeze & auction to the next node**.  
-- **🔐 Proof-of-Function (PoF):** Every function generates a **hash proof**, verified on-chain before payment.  
-- **💰 Auction-Based Incentives:** Competitive bidding assigns tasks efficiently, rewarding nodes fairly.  
-- **⚡ Off-Chain Execution, On-Chain Verification:** Heavy computation runs off-chain while verification and rewards remain **trustless and transparent**.  
+**HashLayer** is the foundation for a **decentralized compute consensus system** — where the most effective process to transform a task into an output becomes a *shared, ownable digital asset*.
 
----
+Nodes commit candidate computation strategies (expressed as hashed matrices).  
+A majority consensus selects the most efficient or correct result.  
+The **winning computation**, represented by its hash, becomes a reusable building block.  
+Each time it’s reused, its owners automatically receive Flow token royalties via **Flow Actions**.
 
-## 🏗 Architecture
-
-![DPU Architecture GIF](https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif)**
-
-1. **User submits task** → creates a `Task` resource with code snippet or reference.  
-2. **Task stored on-chain** → secured in **TaskManager contract**.  
-3. **Nodes execute task** → off-chain computation in Python/JS/etc.  
-4. **Hash proof submitted** → verified by **verification nodes**.  
-5. **Rewards released** → on successful verification.  
-6. **Partial task handoff** → auction continues to the next node.  
+> 💡 In essence: HashLayer transforms computation from an ephemeral process into a modular, monetizable resource.
 
 ---
 
-## 🛠 Tech Stack
+## 🧩 Core Idea
 
-- **Flow Blockchain & Cadence**: Resource-oriented smart contracts, atomic transactions  
-- **Off-Chain Execution**: Python, JavaScript, or any language  
-- **IPFS / External Links**: Optional storage for large task code  
+1. **Task Commitment**  
+   Nodes receive a task → compute a result → commit the hash of their computation matrix.
+
+2. **Consensus & Selection**  
+   Majority agreement determines the most effective (or correct) matrix transformation.
+
+3. **Ownership & Rewarding**  
+   The winning nodes receive ownership shares of that matrix hash.
+
+4. **Usage & Royalties (via Flow Actions)**  
+   Whenever that matrix (computation method) is reused by others, Flow Actions trigger automatic royalty payments to the owners.
+
+---
+
+## ⚙️ Why It Matters
+
+- **Parallelizable:** Tasks are decomposed into matrix segments computed by different nodes.  
+- **Modular:** Reusable “computation blueprints” can be combined to form larger tasks.  
+- **Ownable:** Each effective process or transformation can be tokenized and reused like intellectual property.  
+- **Scalable:** Ideal for AI training, gaming, or any domain requiring distributed computation.  
+- **Incentivized:** Contributors are rewarded instantly for computational innovation and efficiency.
 
 ---
 
-## 💡 Why DPU?
+## 🔬 Potential Impact
 
-DPU demonstrates a **trustless, verifiable, scalable approach to decentralized computation**, leveraging Flow’s unique features:  
-- Resource-oriented assets 🔒  
-- Composable workflows 🧩  
-- Atomic transactions ⚡  
-
-It’s essentially a **Flow-native evolution of Golem**, designed to **revolutionise computing**.  
+| Domain | Impact |
+|---------|--------|
+| **AI & LLM Training** | Reuse optimized computation paths to cut training costs. |
+| **Gaming / Simulations** | Access high-performance compute transformations via pay-per-use Actions. |
+| **Scientific Research** | Enables transparent, modular, and verifiable computation. |
+| **DeSci / Open Compute** | Researchers can own and monetize their computation methods. |
 
 ---
+
+## 🔗 Built on Flow
+
+Flow’s **resource-oriented model** and **Actions framework** make it the perfect chain for this system:
+- Resources model ownership of computation structures.
+- Actions enable atomic royalty payments for reuse.
+- FlowToken + FungibleToken standards handle distributed incentives.
+
+---
+
+## 🧱 Architecture Overview
