@@ -289,6 +289,10 @@ access(all) contract HashLayer {
 
     // ---------------- acceptMatrixAndDistributeShares (owner must sign) ----------------
     // Accepts rowHashes (off-chain computed) and requires the task owner to approve.
+    // Note: Each OutputShare represents ownership of a computation result.
+// rowHash: currently stores the hash of the **entire matrix** (not individual rows).
+// This allows the system to verify consensus on the full output without storing all data on-chain.
+// Future versions could optionally split matrices into per-row shares
     access(all) fun acceptMatrixAndDistributeShares(
         taskId: UInt64,
         rowHashes: [String],
