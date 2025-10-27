@@ -1,6 +1,7 @@
+
 // SPDX-License-Identifier: MIT
 //
-// HashLayer_v3_fixed.cdc
+// HashLayer_v4.cdc
 //
 // HashLayer - manual deposits + ComputeShares + pay-to-use royalty system
 // - No Forte/Actions dependency
@@ -10,41 +11,43 @@
 // - payToUse(...) allows users to buy time-limited access (cost = duration * payRatePerSecond)
 // - Royalties accumulated per-share and claimable by ComputeShare owners
 //
+// Cadence 1.0+ compliant: uses access(all) and relies on automatic resource cleanup.
+//
 // NOTE: Test extensively in Flow Emulator / Testnet.
 
 import FungibleToken from 0x9a0766d93b6608b7
 import FlowToken from 0x7e60df042a9c0868
 import Crypto from 0x631e88ae7f1d7c20
 
-access(contract) contract HashLayer {
+access(all) contract HashLayer {
 
     // ---------------- Events ----------------
-    pub event TaskCreated(taskId: UInt64, owner: Address)
-    pub event CommitSubmitted(taskId: UInt64, worker: Address)
-    pub event RevealSubmitted(taskId: UInt64, worker: Address, resultHash: String, revealCID: String?)
-    pub event TaskAccepted(taskId: UInt64, winningHash: String, winners: [Address])
+    access(all) event TaskCreated(taskId: UInt64, owner: Address)
+    access(all) event CommitSubmitted(taskId: UInt64, worker: Address)
+    access(all) event RevealSubmitted(taskId: UInt64, worker: Address, resultHash: String, revealCID: String?)
+    access(all) event TaskAccepted(taskId: UInt64, winningHash: String, winners: [Address])
 
-    pub event ComputeShareMinted(taskId: UInt64, shareId: UInt64, owner: Address)
-    pub event ComputeShareDeposited(taskId: UInt64, shareId: UInt64, owner: Address, depositedToOwner: Bool)
-    pub event FallbackShareStored(taskId: UInt64, shareId: UInt64, owner: Address)
+    access(all) event ComputeShareMinted(taskId: UInt64, shareId: UInt64, owner: Address)
+    access(all) event ComputeShareDeposited(taskId: UInt64, shareId: UInt64, owner: Address, depositedToOwner: Bool)
+    access(all) event FallbackShareStored(taskId: UInt64, shareId: UInt64, owner: Address)
 
-    pub event UsagePaid(taskId: UInt64, payer: Address, duration: UFix64, amount: UFix64)
-    pub event DepositToTask(taskId: UInt64, from: Address?, amount: UFix64)
-    pub event RefundReturned(to: Address, amount: UFix64)
-    pub event OwnerWithdraw(taskId: UInt64, owner: Address, amount: UFix64)
-    pub event RoyaltiesClaimed(taskId: UInt64, claimer: Address, amount: UFix64)
+    access(all) event UsagePaid(taskId: UInt64, payer: Address, duration: UFix64, amount: UFix64)
+    access(all) event DepositToTask(taskId: UInt64, from: Address?, amount: UFix64)
+    access(all) event RefundReturned(to: Address, amount: UFix64)
+    access(all) event OwnerWithdraw(taskId: UInt64, owner: Address, amount: UFix64)
+    access(all) event RoyaltiesClaimed(taskId: UInt64, claimer: Address, amount: UFix64)
 
-    pub event NodeResultsFinalized(taskId: UInt64, winningHash: String, winners: [Address], payoutPerWinner: UFix64)
+    access(all) event NodeResultsFinalized(taskId: UInt64, winningHash: String, winners: [Address], payoutPerWinner: UFix64)
 
     // store row/share links (e.g., IPFS CID or URL) for offchain access
-    pub event RowLinkStored(taskId: UInt64, shareId: UInt64, link: String)
+    access(all) event RowLinkStored(taskId: UInt64, shareId: UInt64, link: String)
 
     // ---------------- ComputeShare resource ----------------
     // NOTE: No row data stored on-chain; only rowHash kept and optionally a link is stored in mapping.
-    access(contract) resource ComputeShare {
-        pub let taskId: UInt64
-        pub let ownerAddress: Address
-        pub let rowHash: String
+    access(all) resource ComputeShare {
+        access(all) let taskId: UInt64
+        access(all) let ownerAddress: Address
+        access(all) let rowHash: String
 
         init(taskId: UInt64, ownerAddress: Address, rowHash: String) {
             self.taskId = taskId
@@ -54,63 +57,61 @@ access(contract) contract HashLayer {
     }
 
     // Receiver interface for account collections
-    access(contract) resource interface ComputeShareReceiver {
-        pub fun deposit(share: @ComputeShare, shareId: UInt64)
+    access(all) resource interface ComputeShareReceiver {
+        access(all) fun deposit(share: @ComputeShare, shareId: UInt64)
     }
 
     // Per-account collection resource
-    access(contract) resource ComputeShareCollection: ComputeShareReceiver {
-        access(contract) var owned: @{UInt64: ComputeShare}
+    access(all) resource ComputeShareCollection: ComputeShareReceiver {
+        access(all) var owned: @{UInt64: ComputeShare}
 
         init() {
             self.owned <- {}
         }
 
-        pub fun deposit(share: @ComputeShare, shareId: UInt64) {
+        access(all) fun deposit(share: @ComputeShare, shareId: UInt64) {
             self.owned[shareId] <-! share
         }
 
-        pub fun withdraw(shareId: UInt64): @ComputeShare {
+        access(all) fun withdraw(shareId: UInt64): @ComputeShare {
             let s <- self.owned.remove(key: shareId)
                 ?? panic("No share with that id in collection")
             return <- s
         }
 
-        destroy() {
-            destroy self.owned
-        }
+        // no destroy() override — Cadence 1.0 will handle cleanup automatically
     }
 
     // Public helper to create a collection for external accounts
-    pub fun createEmptyCollection(): @ComputeShareCollection {
+    access(all) fun createEmptyCollection(): @ComputeShareCollection {
         return <- create ComputeShareCollection()
     }
 
     // ---------------- Task resource ----------------
-    access(contract) resource Task {
-        pub let id: UInt64
-        pub let owner: Address
-        pub let dataCID: String
-        pub let k: UInt64
-        pub let reward: UFix64
+    access(all) resource Task {
+        access(all) let id: UInt64
+        access(all) let owner: Address
+        access(all) let dataCID: String
+        access(all) let k: UInt64
+        access(all) let reward: UFix64
 
         // Royalties: payRatePerSecond defines price (Flow) per second of access
-        pub let payRatePerSecond: UFix64
-        pub let defaultAccessWindow: UFix64
+        access(all) let payRatePerSecond: UFix64
+        access(all) let defaultAccessWindow: UFix64
 
         // commit/reveal maps (worker -> hash)
-        access(contract) var commits: {Address: String}
-        access(contract) var reveals: {Address: String}
-        access(contract) var revealCIDs: {Address: String}
-        access(contract) var accepted: Bool
+        access(all) var commits: {Address: String}
+        access(all) var reveals: {Address: String}
+        access(all) var revealCIDs: {Address: String}
+        access(all) var accepted: Bool
 
         // deadlines (seconds since epoch). Use 0.0 for no deadline.
-        pub let commitDeadline: UFix64
-        pub let revealDeadline: UFix64
+        access(all) let commitDeadline: UFix64
+        access(all) let revealDeadline: UFix64
 
         // Per-task vaults for rewards and royalties
-        access(contract) var rewardVault: @FlowToken.Vault
-        access(contract) var royaltyVault: @FlowToken.Vault
+        access(all) var rewardVault: @FlowToken.Vault
+        access(all) var royaltyVault: @FlowToken.Vault
 
         init(
             id: UInt64,
@@ -142,13 +143,7 @@ access(contract) contract HashLayer {
             self.royaltyVault <- FlowToken.createEmptyVault()
         }
 
-        destroy() {
-            destroy self.rewardVault
-            destroy self.royaltyVault
-        }
-
-        // Worker commits an answer hash
-        pub fun commit(worker: Address, commitHash: String) {
+        access(all) fun commit(worker: Address, commitHash: String) {
             // enforce commitDeadline if set (>0)
             if self.commitDeadline > 0.0 {
                 let now: UFix64 = getCurrentBlock().timestamp
@@ -159,8 +154,7 @@ access(contract) contract HashLayer {
             self.commits[worker] = commitHash
         }
 
-        // Worker reveals answer details (we only store a result hash for consensus)
-        pub fun reveal(worker: Address, resultHash: String, revealCID: String?) {
+        access(all) fun reveal(worker: Address, resultHash: String, revealCID: String?) {
             if self.revealDeadline > 0.0 {
                 let now: UFix64 = getCurrentBlock().timestamp
                 if now > self.revealDeadline {
@@ -173,52 +167,52 @@ access(contract) contract HashLayer {
             }
         }
 
-        pub fun getAllReveals(): {Address: String} {
+        access(all) fun getAllReveals(): {Address: String} {
             return self.reveals
         }
 
-        pub fun markAccepted() {
+        access(all) fun markAccepted() {
             self.accepted = true
         }
     }
 
     // ---------------- Contract-level storage ----------------
-    access(contract) var tasks: @{UInt64: Task}
-    access(contract) var nextTaskId: UInt64
+    access(all) var tasks: @{UInt64: Task}
+    access(all) var nextTaskId: UInt64
 
     // fallbackComputeShares[taskId] => @{ shareId: ComputeShare }
-    access(contract) var fallbackComputeShares: @{UInt64: @{UInt64: ComputeShare}}
-    access(contract) var nextShareId: UInt64
+    access(all) var fallbackComputeShares: @{UInt64: @{UInt64: ComputeShare}}
+    access(all) var nextShareId: UInt64
 
     // shareOwners[shareId] = ownerAddress
-    access(contract) var shareOwners: {UInt64: Address}
+    access(all) var shareOwners: {UInt64: Address}
     // taskShareIds[taskId] = [shareId,...]   (each share = one row assignment)
-    access(contract) var taskShareIds: {UInt64: [UInt64]}
+    access(all) var taskShareIds: {UInt64: [UInt64]}
     // taskShareOwners[taskId] = [ownerAddress,...] (unique owners list)
-    access(contract) var taskShareOwners: {UInt64: [Address]}
+    access(all) var taskShareOwners: {UInt64: [Address]}
 
     // rowAssignments[taskId][worker] = [rowIndex,...]
-    access(contract) var rowAssignments: {UInt64: {Address: [UInt64]}}
+    access(all) var rowAssignments: {UInt64: {Address: [UInt64]}}
     // nodeResults[taskId][nodeAddr] = resultHash
-    access(contract) var nodeResults: {UInt64: {Address: String}}
+    access(all) var nodeResults: {UInt64: {Address: String}}
 
     // Accounting for royalties per-share:
     // royaltyPerShare[taskId] = cumulative royalties amount allocated per share (UFix64)
-    access(contract) var royaltyPerShare: {UInt64: UFix64}
+    access(all) var royaltyPerShare: {UInt64: UFix64}
     // lastClaimedPerShare[taskId][owner] = snapshot of royaltyPerShare at last claim
-    access(contract) var lastClaimedPerShare: {UInt64: {Address: UFix64}}
+    access(all) var lastClaimedPerShare: {UInt64: {Address: UFix64}}
 
     // contract-level vault (temporary; most flows use task vaults)
-    access(contract) var contractVault: @FlowToken.Vault
+    access(all) var contractVault: @FlowToken.Vault
 
     // Track share counts per owner per task to allow O(1) claim
-    access(contract) var ownerShareCount: {UInt64: {Address: UInt64}}
+    access(all) var ownerShareCount: {UInt64: {Address: UInt64}}
 
     // mapping to store row/share links (e.g., IPFS CID or URL)
-    access(contract) var taskRowLinks: {UInt64: {UInt64: String}}
+    access(all) var taskRowLinks: {UInt64: {UInt64: String}}
 
     // accessRegistry: who has access until when per task
-    access(contract) var accessRegistry: {Address: {UInt64: UFix64}}
+    access(all) var accessRegistry: {Address: {UInt64: UFix64}}
 
     init() {
         self.tasks <- {}
@@ -242,17 +236,11 @@ access(contract) contract HashLayer {
         self.accessRegistry = {}
     }
 
-    destroy() {
-        destroy self.tasks
-        destroy self.fallbackComputeShares
-        destroy self.contractVault
-    }
-
     // ---------------- Task creation (anyone can create a task) ----------------
     //
     // Must be called from a transaction that passes the creator's AuthAccount
     //
-    pub fun createTask(
+    access(all) fun createTask(
         dataCID: String,
         k: UInt64,
         reward: UFix64,
@@ -284,23 +272,21 @@ access(contract) contract HashLayer {
     // ---------------- depositToTask ----------------
     // Anyone can deposit Flow tokens into a task's reward vault.
     // Caller expectation: passing a FlowToken.Vault -> entire vault will be deposited into rewardVault.
-    pub fun depositToTask(taskId: UInt64, from: @FlowToken.Vault, depositor: AuthAccount?) {
+    access(all) fun depositToTask(taskId: UInt64, from: @FlowToken.Vault, depositor: AuthAccount?) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
-        // capture amount before moving resource
         let amount: UFix64 = from.balance
         tRef!.rewardVault.deposit(from: <- from)
-        // depositor may be nil (e.g., called from contract-level). Use nil-able addr to emit.
         emit DepositToTask(taskId: taskId, from: depositor?.address, amount: amount)
     }
 
     // ---------------- commit / reveal (workers pass their AuthAccount) ----------------
-    pub fun submitCommit(taskId: UInt64, commitHash: String, workerAcct: AuthAccount) {
+    access(all) fun submitCommit(taskId: UInt64, commitHash: String, workerAcct: AuthAccount) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
         tRef!.commit(workerAcct.address, commitHash)
         emit CommitSubmitted(taskId: taskId, worker: workerAcct.address)
     }
 
-    pub fun submitReveal(taskId: UInt64, resultHash: String, revealCID: String?, workerAcct: AuthAccount) {
+    access(all) fun submitReveal(taskId: UInt64, resultHash: String, revealCID: String?, workerAcct: AuthAccount) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
         tRef!.reveal(workerAcct.address, resultHash, revealCID)
         emit RevealSubmitted(taskId: taskId, worker: workerAcct.address, resultHash: resultHash, revealCID: revealCID)
@@ -309,7 +295,7 @@ access(contract) contract HashLayer {
     // ---------------- acceptMatrixAndDistributeShares (owner must sign) ----------------
     // Accepts rowHashes (off-chain computed) and requires the task owner to approve.
     // Mints ComputeShares for winners and records ownership. Task owner cannot be a claimant for royalties.
-    pub fun acceptMatrixAndDistributeShares(
+    access(all) fun acceptMatrixAndDistributeShares(
         taskId: UInt64,
         rowHashes: [String],
         ownerAcct: AuthAccount
@@ -490,24 +476,24 @@ access(contract) contract HashLayer {
     // Payment increases royaltyPerShare by amount / totalShares.
     //
     // Returns remainder vault (if caller passed more than cost).
-    pub fun payToUse(
+    access(all) fun payToUse(
         taskId: UInt64,
         duration: UFix64,
         payerAcct: AuthAccount,
         from: @FlowToken.Vault
     ): @FlowToken.Vault {
-        if duration <= 0.0 { destroy from; panic("duration must be > 0") }
+        if duration <= 0.0 { panic("duration must be > 0") }
 
-        let tRef = &self.tasks[taskId] as &Task? ?? { destroy from; panic("Task not found") }()
-        let task = tRef!
+        let tRefOpt = &self.tasks[taskId] as &Task?
+        if tRefOpt == nil { panic("Task not found") }
+        let task = tRefOpt!
 
-        if !task.accepted { destroy from; panic("Task must be accepted (compute shares minted) before payToUse") }
+        if !task.accepted { panic("Task must be accepted (compute shares minted) before payToUse") }
 
         // compute cost
         let cost: UFix64 = duration * task.payRatePerSecond
 
         if from.balance < cost {
-            destroy from
             panic("Insufficient funds in provided vault for requested duration")
         }
 
@@ -521,7 +507,6 @@ access(contract) contract HashLayer {
         if totalSharesCount == 0 {
             // safety: no shares means refund remainder and leave royalty as-is
             let refund <- from
-            // emit usage paid even though no shares? choose to emit with amount 0 to indicate no-op (we'll emit refund)
             emit RefundReturned(to: payerAcct.address, amount: refund.balance)
             return <- refund
         }
@@ -553,8 +538,7 @@ access(contract) contract HashLayer {
     // ---------------- claimRoyalties ----------------
     // A ComputeShare holder calls this (with their AuthAccount) to claim all available royalties
     // owed to them for a specific task. Task owner is explicitly forbidden from claiming.
-    //
-    pub fun claimRoyalties(taskId: UInt64, claimant: AuthAccount) {
+    access(all) fun claimRoyalties(taskId: UInt64, claimant: AuthAccount) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
         let task = tRef!
 
@@ -602,7 +586,6 @@ access(contract) contract HashLayer {
             .borrow<&{FungibleToken.Receiver}>()
 
         if claimerReceiver == nil {
-            // If claimant has no flowTokenReceiver, revert (you could accept leaving owed in vault instead)
             panic("Claimant has not linked a Flow token receiver at /public/flowTokenReceiver")
         }
 
@@ -614,7 +597,7 @@ access(contract) contract HashLayer {
 
     // ---------------- finalizeNodeResults ----------------
     // Pays winners pro-rata from the task.rewardVault. If any winner cannot accept, leave funds in vault.
-    pub fun finalizeNodeResults(taskId: UInt64) {
+    access(all) fun finalizeNodeResults(taskId: UInt64) {
         let resultsMap = self.nodeResults[taskId] ?? panic("No node results for task")
         var freq: {String: [Address]} = {}
         for nodeAddr in resultsMap.keys {
@@ -673,14 +656,13 @@ access(contract) contract HashLayer {
             idx = idx + 1
         }
 
-        // leftover (dust or skipped winners) remains in task.rewardVault
         emit NodeResultsFinalized(taskId: taskId, winningHash: bestHash!, winners: winners, payoutPerWinner: perWinner)
     }
 
     // ---------------- Claim fallback compute shares helper ----------------
     // Allows an account to claim fallback (un-deposited) compute shares into their registered collection.
     // Caller must be the claimant (AuthAccount passed).
-    pub fun claimFallbackShares(taskId: UInt64, claimant: AuthAccount) {
+    access(all) fun claimFallbackShares(taskId: UInt64, claimant: AuthAccount) {
         // ensure claimant has a collection capability
         let receiverCap = claimant.getCapability(/public/HashLayerComputeShareReceiver)
             .borrow<&{ComputeShareReceiver}>()
@@ -688,12 +670,11 @@ access(contract) contract HashLayer {
             panic("Claimant has not registered a HashLayerComputeShareReceiver at /public/HashLayerComputeShareReceiver")
         }
 
-        // attempt to remove fallback mapping for task
         if self.fallbackComputeShares[taskId] == nil {
             return
         }
+
         var map <- self.fallbackComputeShares.remove(key: taskId)!
-        //  iterate and deposit any shares whose owner equals claimant.address
         for shareId in map.keys {
             let shareOwner = self.shareOwners[shareId] ?? panic("share owner missing")
             if shareOwner == claimant.address {
@@ -702,17 +683,16 @@ access(contract) contract HashLayer {
                 emit ComputeShareDeposited(taskId: taskId, shareId: shareId, owner: claimant.address, depositedToOwner: true)
             }
         }
-        // put back the possibly reduced map
+
+        // if entries remain, put map back; otherwise let it go out of scope and be cleaned up
         if map.keys.length > 0 {
             self.fallbackComputeShares[taskId] <-! map
-        } else {
-            destroy map
         }
     }
 
     // ---------------- Owner withdraw reward / cancel task ----------------
     // Allows the task owner to withdraw leftover reward (when desired). Leaves royaltyVault untouched.
-    pub fun ownerWithdrawReward(taskId: UInt64, ownerAcct: AuthAccount, amount: UFix64) {
+    access(all) fun ownerWithdrawReward(taskId: UInt64, ownerAcct: AuthAccount, amount: UFix64) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
         pre { ownerAcct.address == tRef!.owner: "Only task owner can withdraw rewards" }
         let task = tRef!
@@ -732,9 +712,8 @@ access(contract) contract HashLayer {
     // ---------------- Row Link setter (owner or contract) ----------------
     // Allows storing a link (e.g., IPFS CID or URL) for a specific share (or row).
     // You can call this after minting to replace the placeholder rowHash with an actual URL
-    pub fun setRowLink(taskId: UInt64, shareId: UInt64, link: String, setter: AuthAccount) {
+    access(all) fun setRowLink(taskId: UInt64, shareId: UInt64, link: String, setter: AuthAccount) {
         let tRef = &self.tasks[taskId] as &Task? ?? panic("Task not found")
-        // only task owner or contract admin (for now setter==owner) can set link; adapt as needed
         pre { setter.address == tRef!.owner: "Only task owner can set row links" }
 
         if self.taskRowLinks[taskId] == nil {
@@ -746,20 +725,20 @@ access(contract) contract HashLayer {
 
     // ---------------- Views / helpers ----------------
 
-    pub fun getShareIdsForTask(taskId: UInt64): [UInt64] {
+    access(all) fun getShareIdsForTask(taskId: UInt64): [UInt64] {
         return self.taskShareIds[taskId] ?? []
     }
 
-    pub fun getShareOwnersForTask(taskId: UInt64): [Address] {
+    access(all) fun getShareOwnersForTask(taskId: UInt64): [Address] {
         return self.taskShareOwners[taskId] ?? []
     }
 
-    pub fun getRowLink(taskId: UInt64, shareId: UInt64): String? {
+    access(all) fun getRowLink(taskId: UInt64, shareId: UInt64): String? {
         return self.taskRowLinks[taskId]?[shareId]
     }
 
-    // Returns a moved copy of fallback shares for on-chain inspection; caller must destroy
-    pub fun takeFallbackSharesForTask(taskId: UInt64): @{UInt64: ComputeShare}? {
+    // Returns a moved copy of fallback shares for on-chain inspection; caller must destroy/move or let automatic cleanup handle it
+    access(all) fun takeFallbackSharesForTask(taskId: UInt64): @{UInt64: ComputeShare}? {
         if self.fallbackComputeShares[taskId] == nil {
             return nil
         }
@@ -768,7 +747,7 @@ access(contract) contract HashLayer {
     }
 
     // View whether a user currently has access to a task
-    pub fun hasAccess(user: Address, taskId: UInt64): Bool {
+    access(all) fun hasAccess(user: Address, taskId: UInt64): Bool {
         let m = self.accessRegistry[user] ?? {}
         let expiry = m[taskId] ?? 0.0
         let now = getCurrentBlock().timestamp
